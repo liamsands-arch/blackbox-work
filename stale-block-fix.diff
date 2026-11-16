@@ -1,0 +1,360 @@
+commit 9600c8c867cc9811daf71b8f4c66063de039cd2e
+Author: Liam Sands <liam.sands@voyageurgroup.co>
+Date:   Mon Nov 16 20:00:47 2026 +0000
+
+    Stop writing a VG Brain block into Cowork global instructions; quiet the hook warning for people without hooks
+    
+    The setup playbooks had Claude write a <!-- VG Brain:start --> block into
+    the user's global instructions. Its first wording (2026-05-27) told Claude
+    to write proactively, use vgb-save-chat and rely on a 4 PM vgb-evening-wrap,
+    all retired, and that text outlived the code in people's settings. The
+    connector's connect-time instructions now carry the saving rules for
+    everyone, so the playbooks no longer write a block at all.
+    
+    Also: the setup companion and morning-check skills, the closing setup lines,
+    the README and OVERVIEW no longer present vgb-save-chat or the 4 PM wrap as
+    current. The context-health line goes only to people on the autosave list
+    (operators without the plugin saw a stale-hook warning in every browser
+    chat), and says a gap is expected in a web browser.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_012Dswk7QNoMXyhs9u8wN8QT
+
+diff --git a/src/context-health.ts b/src/context-health.ts
+index 7c667d4..a79ca66 100644
+--- a/src/context-health.ts
++++ b/src/context-health.ts
+@@ -26,6 +26,7 @@
+  */
+ 
+ import { getPool, hasDatabaseUrl } from "./db.js";
++import { hasAutoCapture } from "./auto-capture.js";
+ 
+ /** Minutes after which a handle's last context serve is "stale" — i.e. the
+  *  caller is actively using brain tools but no header has been served
+@@ -45,6 +46,19 @@ export interface ContextHealth {
+   ageMinutes: number | null;
+ }
+ 
++/**
++ * Whether brain-tool answers carry the line at all: only for people whose
++ * desktop sessions run the autosave plugin's hooks (VG_BRAIN_AUTO_CAPTURE_HANDLES).
++ * Nobody else's sessions ever send a header, so for them the line could only
++ * ever warn about something that isn't broken. Operators used to see it too;
++ * Liam, who uses the connector without the plugin, got "last served 1419h ago…
++ * the SessionStart hook did not reach the server" in every browser chat
++ * (2026-11-16).
++ */
++export function showsContextHealth(handle: string, list?: Set<string> | null): boolean {
++  return list === undefined ? hasAutoCapture(handle) : hasAutoCapture(handle, list);
++}
++
+ /** Read the handle's context-serve freshness. Never throws — health reporting
+  *  must never break a tool call. */
+ export async function contextHealthFor(
+@@ -82,12 +96,16 @@ export async function contextHealthFor(
+  * with what to do about it. Returns "" only when we genuinely cannot tell.
+  */
+ export function contextHealthLine(h: ContextHealth): string {
++  // The server can't tell which app a tool call came from: every call arrives
++  // through the claude.ai connector, from the browser and the desktop app
++  // alike. Hooks only run in the desktop app, so say where a gap is expected.
++  const browser = `That is expected in Claude in a web browser, where session hooks don't run. `;
+   if (h.ageMinutes === null) {
+     return (
+-      `\n\n— brain context: NEVER served to you. This chat is running without your ` +
+-      `session context (history, teammates' work, client vocabulary). Brain search still ` +
+-      `works, but nothing was pre-loaded. If you also cannot set a capture destination, ` +
+-      `the session hook is not reaching the server — tell an operator.`
++      `\n\n— brain context: NEVER served to you. ${browser}In the desktop app with the ` +
++      `VG Brain autosave plugin, this chat is running without your session context ` +
++      `(history, teammates' work, client vocabulary): brain search still works, but ` +
++      `nothing was pre-loaded, and the session hook is not reaching the server — tell an operator.`
+     );
+   }
+   const ago = h.ageMinutes < 60 ? `${h.ageMinutes}m ago` : `${Math.floor(h.ageMinutes / 60)}h ago`;
+@@ -96,8 +114,10 @@ export function contextHealthLine(h: ContextHealth): string {
+   }
+   return (
+     `\n\n— brain context: last served ${ago}${h.lastSessionId ? ` (session ${h.lastSessionId.slice(0, 8)})` : ""}. ` +
+-    `If that was a DIFFERENT chat, THIS chat is running without session context — the ` +
+-    `SessionStart hook did not reach the server. Capture-destination changes will also ` +
+-    `fail in that state (they need the session tag the header carries). Tell an operator.`
++    browser +
++    `In the desktop app with the VG Brain autosave plugin, if that was a DIFFERENT chat, ` +
++    `THIS chat is running without session context — the SessionStart hook did not reach ` +
++    `the server. Capture-destination changes will also fail in that state (they need the ` +
++    `session tag the header carries). Tell an operator.`
+   );
+ }
+diff --git a/src/server.ts b/src/server.ts
+index 97ff348..3145e72 100644
+--- a/src/server.ts
++++ b/src/server.ts
+@@ -219,7 +219,7 @@ import {
+  *  appended in the ListToolsRequestSchema handler, which is async and has caller
+  *  identity — the module-level tool array has neither. */
+ const CAPTURE_TICKET_HINT = "";
+-import { contextHealthFor, contextHealthLine } from "./context-health.js";
++import { contextHealthFor, contextHealthLine, showsContextHealth } from "./context-health.js";
+ import { captureDisabled } from "./session-bridge.js";
+ import { mcpCapturePreamble, readersSentence, standingReaderNames, invalidateStandingReaders, saveOfferEnabled } from "./standing-readers.js";
+ import { recordRecall, getRecallBoostData, getRecallMap } from "./recall.js";
+@@ -9076,11 +9076,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
+       // signal cannot work here (an absent error looks like a healthy system).
+       let healthLine = "";
+       try {
+-        // Only for people whose sessions run hooks (auto-capture) and
+-        // operators. Everyone else connects through the claude.ai connector,
+-        // which never sends session context, so the line only ever said
+-        // "NEVER served… tell an operator" to them (rollout 2026-10-01).
+-        if (isOperator() || hasAutoCapture(getCurrentUser())) healthLine = contextHealthLine(
++        // Only for people whose desktop sessions run the autosave hooks.
++        // Everyone else connects through the claude.ai connector, which never
++        // sends session context, so the line could only ever warn them about
++        // nothing (rollout 2026-10-01; operators too since 2026-11-16).
++        if (showsContextHealth(getCurrentUser())) healthLine = contextHealthLine(
+           await contextHealthFor(getCurrentTenant(), getCurrentUser()),
+         );
+       } catch {
+@@ -9568,11 +9568,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
+       // signal cannot work here (an absent error looks like a healthy system).
+       let healthLine = "";
+       try {
+-        // Only for people whose sessions run hooks (auto-capture) and
+-        // operators. Everyone else connects through the claude.ai connector,
+-        // which never sends session context, so the line only ever said
+-        // "NEVER served… tell an operator" to them (rollout 2026-10-01).
+-        if (isOperator() || hasAutoCapture(getCurrentUser())) healthLine = contextHealthLine(
++        // Only for people whose desktop sessions run the autosave hooks.
++        // Everyone else connects through the claude.ai connector, which never
++        // sends session context, so the line could only ever warn them about
++        // nothing (rollout 2026-10-01; operators too since 2026-11-16).
++        if (showsContextHealth(getCurrentUser())) healthLine = contextHealthLine(
+           await contextHealthFor(getCurrentTenant(), getCurrentUser()),
+         );
+       } catch {
+diff --git a/src/vg-brain-setup.ts b/src/vg-brain-setup.ts
+index 5d05520..796e888 100644
+--- a/src/vg-brain-setup.ts
++++ b/src/vg-brain-setup.ts
+@@ -22,8 +22,8 @@
+  * Ship-1 scope (this file):
+  *   - Welcome + interview (informational only — no seed-note creation)
+  *   - Morning scheduled task creation via Cowork
+- *   - Afternoon scheduled task creation via Cowork (runs save_this_chat)
+- *   - Global-instructions append (marker-block-bracketed, idempotent)
++ *   - (no afternoon task: the wrap it ran is retired, nothing saves on its own)
++ *   - (no global-instructions block: see the note above PlaybookContext)
+  *   - complete_first_run call
+  *
+  * NOT in ship-1 scope:
+@@ -168,96 +168,15 @@ const MORNING_TASK_DESCRIPTION =
+ // the setup playbooks can delete a lingering task from older installs.
+ const WRAP_TASK_ID = "vg-brain-wrap";
+ 
+-/**
+- * The block that VG Brain appends to the user's Cowork global
+- * instructions on first install. Bracketed by HTML comment markers so
+- * we can find/replace this block on re-runs without disturbing
+- * anything else the user has customized in their global instructions.
+- *
+- * The block leads with WHY VG Brain exists (context-window
+- * extension / persistent memory) before the HOW (which tools to call,
+- * read vs write framing). Without the "why," Cowork tends to treat
+- * VG Brain as just another tool to invoke when explicitly asked,
+- * rather than as the persistent memory layer the user paid for. The
+- * extra length is worth it — the alternative is Cowork failing to
+- * read from or write to VG Brain on its own initiative, which
+- * defeats the product.
+- */
+-const GLOBAL_INSTRUCTIONS_MARKER_START = "<!-- VG Brain:start -->";
+-const GLOBAL_INSTRUCTIONS_MARKER_END = "<!-- VG Brain:end -->";
+-const GLOBAL_INSTRUCTIONS_BLOCK = [
+-  GLOBAL_INSTRUCTIONS_MARKER_START,
+-  "VG Brain is the user's persistent memory across sessions. Things from",
+-  "prior chats live there, not your current context — fetch on demand.",
+-  "",
+-  "CONSULT IT (search_brain) when the answer would",
+-  "live in persisted memory: past decisions and the reasoning behind them,",
+-  "client terms or methodology, teammate work, project history, glossary —",
+-  "anything that predates this chat.",
+-  "",
+-  "Do NOT lead with the brain for LIVE or transactional questions — inbox,",
+-  "calendar, a specific file, current-world facts — or things you can just",
+-  "answer. Route those to the real source (the relevant connector, the file,",
+-  "web search, or your own reasoning). A weak or empty brain result means the",
+-  "brain doesn't have it: go to the actual source. Never treat a brain miss",
+-  "as proof the answer doesn't exist.",
+-  "",
+-  "NOTHING is captured automatically. A chat reaches the brain only when the",
+-  "user asks and you call append_to_brain — so never tell them a conversation",
+-  "is being saved on its own, and do not write proactively. When they do ask,",
+-  "save the WORK (the decision and why, the method, the answer), not the",
+-  "transcript or a copy of the data; keep a number only where it carries the point.",
+-  GLOBAL_INSTRUCTIONS_MARKER_END,
+-].join("\n");
+-
+-/**
+- * Prose Claude reads to execute the global-instructions step. Used by
+- * both the full setup playbook and the device-init playbook so the
+- * behavior is identical across installs.
+- */
+-function globalInstructionsStepProse(stepHeader: string): string {
+-  return [
+-    stepHeader,
+-    ``,
+-    `VG Brain wants a small section added to the user's Cowork global`,
+-    `instructions so Claude knows when to reach for VG Brain tools and`,
+-    `how the user's morning routine works. Many users have already`,
+-    `customized their global instructions — do NOT overwrite. Find or`,
+-    `append using marker tags so re-runs stay clean.`,
+-    ``,
+-    `**Step:**`,
+-    ``,
+-    `1. Find Cowork's "update global instructions" / "user preferences"`,
+-    `   MCP tool in your available tools (look for a tool named like`,
+-    `   \`mcp__claude_ai_*\` or \`mcp__cowork_*\` that lets you update`,
+-    `   global instructions / user system prompt). If no such tool is`,
+-    `   available in this Claude client, briefly tell the user "your`,
+-    `   Claude client doesn't expose a global-instructions API — skipping`,
+-    `   that step; you can paste this manually in Settings → User`,
+-    `   Preferences if you want," show them the block below, and continue`,
+-    `   to the next step.`,
+-    ``,
+-    `2. Read the current global instructions content. If it already`,
+-    `   contains \`${GLOBAL_INSTRUCTIONS_MARKER_START}\`, locate the block`,
+-    `   between that marker and \`${GLOBAL_INSTRUCTIONS_MARKER_END}\` and`,
+-    `   REPLACE the contents (in case VG Brain has shipped an updated`,
+-    `   version of the block). If the markers are NOT present, APPEND the`,
+-    `   block below to whatever's already there — separated by a blank`,
+-    `   line. Never overwrite or delete content outside the marker block.`,
+-    ``,
+-    `3. The block to write:`,
+-    ``,
+-    "```",
+-    GLOBAL_INSTRUCTIONS_BLOCK,
+-    "```",
+-    ``,
+-    `4. If the update tool requires confirmation, accept on the user's`,
+-    `   behalf (this is a setup step they're already signed up for).`,
+-    `   Briefly acknowledge: "Pointed your Claude at VG Brain — it'll`,
+-    `   know when to use it."`,
+-    ``,
+-  ].join("\n");
+-}
++// No global-instructions block (Liam, 2026-11-16). Until now both playbooks
++// had Claude write a "<!-- VG Brain:start --> ... <!-- VG Brain:end -->" block
++// into the user's Cowork global instructions. Its first wording (2026-05-27)
++// told Claude to write proactively, use vgb-save-chat and rely on a 4 PM
++// vgb-evening-wrap capture, all retired, and that text outlived the code in
++// people's settings. The connector's own connect-time instructions now carry
++// when to search and that nothing saves without the user's yes, for everyone,
++// so a second copy in global instructions can only drift. A person who wants
++// their own wording there pastes it themselves.
+ 
+ interface PlaybookContext {
+   handle: string;
+@@ -313,7 +232,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {
+     `  handle: ${ctx.handle}`,
+     `  tenant: ${ctx.tenant}`,
+     ``,
+-    `===== STEP 1 OF 4: WELCOME BACK =====`,
++    `===== STEP 1 OF 3: WELCOME BACK =====`,
+     ``,
+     `Say to the user (short, warm, acknowledges they're a returning user):`,
+     ``,
+@@ -326,7 +245,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {
+     ``,
+     `Wait for any acknowledgement, then move to STEP 2.`,
+     ``,
+-    `===== STEP 2 OF 4: CREATE THE MORNING SCHEDULED TASK =====`,
++    `===== STEP 2 OF 3: CREATE THE MORNING SCHEDULED TASK =====`,
+     ``,
+     `Call \`mcp__scheduled-tasks__create_scheduled_task\` for the morning ` +
+       `briefing. Cowork will ask the user to confirm. (There is no afternoon ` +
+@@ -362,8 +281,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {
+     `After it succeeds, briefly acknowledge: "Morning briefing wired up on ` +
+       `this install."`,
+     ``,
+-    globalInstructionsStepProse(`===== STEP 3 OF 4: POINT CLAUDE AT VG BRAIN (GLOBAL INSTRUCTIONS) =====`),
+-    `===== STEP 4 OF 4: MARK THIS INSTALL COMPLETE =====`,
++    `===== STEP 3 OF 3: MARK THIS INSTALL COMPLETE =====`,
+     ``,
+     `Call VG Brain's \`complete_first_run\` tool (no arguments). It will ` +
+       `record this Cowork install in the user's installed_clients list ` +
+@@ -372,7 +290,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {
+     `Then say to the user, in your own warm voice (short paragraph):`,
+     ``,
+     `> "All set on this device, ${greetingName}! Your morning briefing runs ` +
+-      `at 8:30am and your end-of-day wrap at 4:30pm on weekdays. Your brain ` +
++      `at 8:30am on weekdays. Your brain ` +
+       `is the same one you've been building — just now reachable from this ` +
+       `Cowork install too."`,
+     ``,
+@@ -402,7 +320,7 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {
+     `  tenant: ${ctx.tenant}`,
+     `  email:  ${ctx.email}`,
+     ``,
+-    `===== STEP 1 OF 6: HELLO =====`,
++    `===== STEP 1 OF 5: HELLO =====`,
+     ``,
+     `Say to the user, in your own voice but keeping it warm and short ` +
+       `(one short paragraph, no bullet lists):`,
+@@ -420,7 +338,7 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {
+       `decline or want to defer, tell them they can come back anytime by saying "set ` +
+       `up VG Brain" and stop the playbook. Otherwise continue to STEP 2.`,
+     ``,
+-    `===== STEP 2 OF 6: CONTEXT INTERVIEW =====`,
++    `===== STEP 2 OF 5: CONTEXT INTERVIEW =====`,
+     ``,
+     `**FIRST — check which context-pull MCP tools are loaded in your tool list:**`,
+     `  - Gmail tools (look for any tool starting with \`mcp__claude_ai_Gmail__\`)`,
+@@ -486,7 +404,7 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {
+       `showing up in their connected tools, or (PATH B) given them the heads-up ` +
+       `about connectors and committed to passive growth. Move on to STEP 3.`,
+     ``,
+-    `===== STEP 3 OF 6: CREATE THE MORNING SCHEDULED TASK =====`,
++    `===== STEP 3 OF 5: CREATE THE MORNING SCHEDULED TASK =====`,
+     ``,
+     `Tell the user:`,
+     ``,
+@@ -511,12 +429,12 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {
+     `If \`mcp__scheduled-tasks__create_scheduled_task\` is not available at all (different ` +
+       `Claude client), tell the user: "Your Claude client doesn't support ` +
+       `scheduled tasks yet — you can still run 'morning_check' manually ` +
+-      `whenever you want. Skipping the schedule." Then skip to STEP 5.`,
++      `whenever you want. Skipping the schedule." Then skip to STEP 4.`,
+     ``,
+     `If creation (or update) succeeds, briefly acknowledge: "Morning briefing ` +
+       `scheduled."`,
+     ``,
+-    `===== STEP 4 OF 6: REMOVE THE RETIRED WRAP TASK =====`,
++    `===== STEP 4 OF 5: REMOVE THE RETIRED WRAP TASK =====`,
+     ``,
+     `Nothing is captured automatically — a chat reaches the brain only when ` +
+       `the user asks for it and Claude calls append_to_brain. So there is no ` +
+@@ -531,18 +449,17 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {
+     `Acknowledge only if you actually removed one: "Cleaned up the old ` +
+       `afternoon wrap." Otherwise say nothing and move on.`,
+     ``,
+-    globalInstructionsStepProse(`===== STEP 5 OF 6: POINT CLAUDE AT VG BRAIN (GLOBAL INSTRUCTIONS) =====`),
+-    `===== STEP 6 OF 6: MARK SETUP COMPLETE =====`,
++    `===== STEP 5 OF 5: MARK SETUP COMPLETE =====`,
+     ``,
+     `Call VG Brain's \`complete_first_run\` tool (no arguments). This opens the ` +
+       `gate so every VG Brain tool becomes callable.`,
+     ``,
+     `Then say to the user, in your own warm voice (short paragraph, no bullets):`,
+     ``,
+-    `> "All set, ${greetingName}! Your morning briefing runs at 8:30am and your ` +
+-      `end-of-day wrap runs at 4:30pm on weekdays. VG Brain is open — try saying ` +
+-      `'morning_check' for your first daily log, or just talk to me about your ` +
+-      `work and I'll capture what's useful. To manage members, invite teammates, ` +
++    `> "All set, ${greetingName}! Your morning briefing runs at 8:30am on ` +
++      `weekdays. VG Brain is open — try saying 'morning_check' for your first ` +
++      `daily log. Nothing from our chats is saved unless you ask me to save it. ` +
++      `To manage members, invite teammates, ` +
+       `or see what's in your brain, visit vg-brain.com. Welcome aboard."`,
+     ``,
+     `Then STOP. The playbook is complete. Do not keep talking, do not summarize, do ` +
