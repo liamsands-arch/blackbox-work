@@ -1,0 +1,775 @@
+<title>Stale Block Fix Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono&family=Space+Grotesk:wght@600&display=swap">
+<style>
+/* Layout: one reading column; each change is a before/after pair; raw diff tucked at the end. */
+:root {
+  --bg:#f5f6f4; --surface:#ffffff; --fg:#1d2321; --muted:#5e6a66; --line:#d9dedb;
+  --accent:#1f6f5c; --add-bg:#e3f3ea; --add-fg:#16603f; --del-bg:#fbe7e7; --del-fg:#9b2b2b; --code-bg:#eef1ef;
+  --display:"Space Grotesk",system-ui,sans-serif; --body:"Inter",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#141917; --surface:#1b2220; --fg:#e4ebe8; --muted:#97a6a0; --line:#2c3633;
+  --accent:#62c3a5; --add-bg:#16332a; --add-fg:#8fe0bf; --del-bg:#3a1d1f; --del-fg:#f2a5a5; --code-bg:#11181a; color-scheme:dark } }
+:root[data-theme="dark"] {
+  --bg:#141917; --surface:#1b2220; --fg:#e4ebe8; --muted:#97a6a0; --line:#2c3633;
+  --accent:#62c3a5; --add-bg:#16332a; --add-fg:#8fe0bf; --del-bg:#3a1d1f; --del-fg:#f2a5a5; --code-bg:#11181a; color-scheme:dark }
+body { background:var(--bg); color:var(--fg); font-family:var(--body); font-size:15px; line-height:1.55; }
+main { max-width:860px; margin:0 auto; padding-block:28px 64px; padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); display:grid; gap:28px; }
+h1 { font-family:var(--display); font-size:30px; line-height:1.15; margin:0 0 6px; text-wrap:balance; }
+h2 { font-family:var(--display); font-size:20px; margin:0 0 8px; text-wrap:balance; }
+p { margin:0 0 10px; max-width:68ch; }
+.lede { color:var(--muted); }
+section { display:grid; gap:10px; }
+.status { display:flex; flex-wrap:wrap; gap:8px; }
+.chip { font-size:12.5px; font-weight:600; letter-spacing:.02em; padding:4px 10px; border-radius:999px; border:1px solid var(--line); background:var(--surface); }
+.chip.ok { color:var(--add-fg); background:var(--add-bg); border-color:transparent; }
+.chip.wait { color:var(--del-fg); background:var(--del-bg); border-color:transparent; }
+.pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+@media (max-width:640px) { .pair { grid-template-columns:1fr; } }
+.side { min-width:0; border-radius:10px; overflow:hidden; border:1px solid var(--line); background:var(--surface); }
+.side h3 { margin:0; font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; padding:7px 12px; }
+.before h3 { background:var(--del-bg); color:var(--del-fg); }
+.after h3 { background:var(--add-bg); color:var(--add-fg); }
+.side pre, .side .txt { margin:0; padding:12px; font-size:13px; white-space:pre-wrap; word-break:break-word; }
+pre, code { font-family:var(--mono); }
+.where { font-family:var(--mono); font-size:12.5px; color:var(--muted); }
+.paste { position:relative; background:var(--surface); border:1px solid var(--accent); border-radius:10px; }
+.paste pre { margin:0; padding:14px; padding-top:44px; font-size:13px; white-space:pre-wrap; word-break:break-word; }
+.copy { position:absolute; top:8px; right:8px; font:600 13px var(--body); padding:6px 12px; border-radius:7px; border:0; background:var(--accent); color:var(--surface); cursor:pointer; }
+.copy:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+ol { margin:0; padding-left:20px; display:grid; gap:6px; }
+details { background:var(--surface); border:1px solid var(--line); border-radius:10px; }
+summary { cursor:pointer; padding:12px 14px; font-weight:600; }
+.diff { overflow-x:auto; margin:0; padding:12px 14px; font-size:12px; line-height:1.45; background:var(--code-bg); border-top:1px solid var(--line); }
+.diff .add { color:var(--add-fg); background:var(--add-bg); display:inline-block; min-width:100%; }
+.diff .del { color:var(--del-fg); background:var(--del-bg); display:inline-block; min-width:100%; }
+.diff .hunk { color:var(--accent); } .diff .file { font-weight:700; color:var(--fg); } .diff .meta { color:var(--muted); }
+</style>
+<main>
+<header>
+  <h1>Stale VG Brain block: the fix</h1>
+  <p class="lede">What changed in the VG Brain server, shown as before and after. Nothing here is live yet: it goes live when you say "push it" and I deploy.</p>
+  <div class="status"><span class="chip ok">Tests: 115 of 115 pass</span><span class="chip wait">Not pushed or deployed</span><span class="chip">No plugin release needed</span></div>
+</header>
+
+<section>
+  <h2>1. The block in your instructions</h2>
+  <p>The only thing that ever wrote this block is VG Brain's first-run setup, in <span class="where">vg-brain/src/vg-brain-setup.ts</span>. Your stale text is word for word its first version from May 27. It was rewritten May 31, and setup has been hidden from Claude since then, so it could not have put the old text back in November. An old copy most likely came back from outside our code, for example through Claude's import of settings.</p>
+  <p>The fix: setup no longer writes any block into anyone's instructions. The connector already tells every chat when to search and that nothing saves without a yes.</p>
+  <div class="pair">
+    <div class="side before"><h3>Before: setup wrote this (May 27 version, the one you found)</h3><pre>&lt;!-- VG Brain:start --&gt;
+VG Brain is the user&#x27;s persistent memory across sessions. Things from
+prior chats live there, not your current context — fetch on demand.
+
+READ FROM IT FIRST when the user asks about anything that might predate
+this chat (decisions, clients, teammate workflows, project history).
+Use `route` / `search_brain` / `read_brain_file`.
+
+WRITE TO IT proactively when something in this chat is worth remembering
+later (decision, client update, methodology, runbook). The vgb-save-chat
+skill proposes a batch the user one-taps to approve; the vgb-evening-wrap
+scheduled task auto-captures silently at 4 PM.
+
+Heuristic: if last-week&#x27;s you would&#x27;ve benefited from this, capture it
+for next-week&#x27;s you (or a teammate). That&#x27;s the whole point.
+&lt;!-- VG Brain:end --&gt;</pre></div>
+    <div class="side after"><h3>After</h3><div class="txt">Setup writes nothing into your instructions. The step that did it is removed from both setup flows, and the steps are renumbered (6 to 5, and 4 to 3).</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>2. Your new block, ready to paste</h2>
+  <p>Paste this once in Claude's settings, replacing anything between the two VG Brain markers. If your settings already show exactly this, there's nothing to do.</p>
+  <div class="paste"><button class="copy" id="copyBlock" type="button">Copy</button><pre id="newBlock">&lt;!-- VG Brain:start --&gt;
+VG Brain is the team&#x27;s shared memory. Anything from past chats lives there, not in this chat, so look it up when needed.
+
+READ FIRST: when I ask about anything that might predate this chat (decisions, clients, teammate workflows, project history), search the brain before answering.
+
+SAVING: nothing from a chat is saved automatically, and nothing gets saved without my yes.
+When a chat has produced something worth keeping (a decision and why, a method we&#x27;ll run again, a finished deliverable, a number reconciled, a client quirk), offer it at a natural stopping point as one short list, like &quot;Worth saving: 1) ... 2) ...&quot;, so I can approve with one reply.
+Only offer when it&#x27;s relevant. Skip quick lookups and small questions, and don&#x27;t re-offer something I passed on.
+My email and Slack are already captured to the brain twice a day by a scheduled task, so don&#x27;t offer to re-save things that happened there.
+&lt;!-- VG Brain:end --&gt;</pre></div>
+</section>
+
+<section>
+  <h2>3. Retired features no longer presented as current</h2>
+  <p>The setup closing message, two server-shipped skills and the README stop describing vgb-save-chat and the 4 PM wrap as things that exist.</p>
+  <div class="pair">
+    <div class="side before"><h3>Before: end of setup</h3><div class="txt">"All set! Your morning briefing runs at 8:30am and your end-of-day wrap runs at 4:30pm on weekdays. … just talk to me about your work and I'll capture what's useful."</div></div>
+    <div class="side after"><h3>After</h3><div class="txt">"All set! Your morning briefing runs at 8:30am on weekdays. … Nothing from our chats is saved unless you ask me to save it."</div></div>
+  </div>
+  <div class="pair">
+    <div class="side before"><h3>Before: setup companion skill</h3><div class="txt">"VG Brain will capture decisions and notes from your chats automatically (at the end of each session) … Try saying 'morning check' or 'save this chat' anytime."</div></div>
+    <div class="side after"><h3>After</h3><div class="txt">"Nothing from your chats is saved on its own: when something is worth keeping, say 'save this to the brain'. Try 'morning check' anytime."</div></div>
+  </div>
+  <div class="pair">
+    <div class="side before"><h3>Before: README</h3><div class="txt">"Six skills install on each user's Cowork by default: vgb-morning-check, vgb-evening-wrap, vgb-evening-sync, vgb-save-chat, vgb-pull-updates, vgb-setup-companion."</div></div>
+    <div class="side after"><h3>After</h3><div class="txt">"vgb-morning-check, vgb-pull-updates, vgb-setup-companion and vgb-offboarding … Nothing from a chat is saved on its own … The 4 PM evening wrap, the evening sync and vgb-save-chat are retired."</div></div>
+  </div>
+  <p>Mentions kept on purpose: the server steps that delete the retired wrap task and skill from old installs (they have to name them), code comments recording the retirement, and dated history docs (HANDOFF, the product deep dive, the old DEMO script, the May 31 decision notes).</p>
+</section>
+
+<section>
+  <h2>4. The "did not reach the server" warning</h2>
+  <p>Expected, not a bug. Hooks only run in the desktop app with the autosave plugin, and you don't have it: your last hook ran around Sep 18, hence "1419h ago". The server added the line for operators too, so you saw it in every chat. It now goes only to the two autosave users, and their version says a gap is expected in a web browser.</p>
+  <div class="pair">
+    <div class="side before"><h3>Before: shown to you</h3><div class="txt">— brain context: last served 1419h ago. If that was a DIFFERENT chat, THIS chat is running without session context — the SessionStart hook did not reach the server. … Tell an operator.</div></div>
+    <div class="side after"><h3>After</h3><div class="txt">You: nothing.<br><br>Alex and Joe: — brain context: last served 3h ago. That is expected in Claude in a web browser, where session hooks don't run. In the desktop app with the VG Brain autosave plugin, if that was a DIFFERENT chat, THIS chat is running without session context …</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>What happens when you say "push it"</h2>
+  <ol>
+    <li>I merge the fix into VG Brain's main branch.</li>
+    <li>I deploy it to vg-brain.com from here (your deploy token is set up), then check the site comes back healthy.</li>
+    <li>If anything looks wrong, I roll back to the release that's live now.</li>
+  </ol>
+</section>
+
+<details>
+  <summary>Full code diff (8 files)</summary>
+  <pre class="diff">commit 9600c8c867cc9811daf71b8f4c66063de039cd2e
+Author: Liam Sands &lt;liam.sands@voyageurgroup.co&gt;
+Date:   Mon Nov 16 20:00:47 2026 +0000
+
+    Stop writing a VG Brain block into Cowork global instructions; quiet the hook warning for people without hooks
+    
+    The setup playbooks had Claude write a &lt;!-- VG Brain:start --&gt; block into
+    the user&#x27;s global instructions. Its first wording (2026-05-27) told Claude
+    to write proactively, use vgb-save-chat and rely on a 4 PM vgb-evening-wrap,
+    all retired, and that text outlived the code in people&#x27;s settings. The
+    connector&#x27;s connect-time instructions now carry the saving rules for
+    everyone, so the playbooks no longer write a block at all.
+    
+    Also: the setup companion and morning-check skills, the closing setup lines,
+    the README and OVERVIEW no longer present vgb-save-chat or the 4 PM wrap as
+    current. The context-health line goes only to people on the autosave list
+    (operators without the plugin saw a stale-hook warning in every browser
+    chat), and says a gap is expected in a web browser.
+    
+    Co-Authored-By: Claude Opus 5.5 &lt;noreply@anthropic.com&gt;
+    Claude-Session: https://claude.ai/code/session_012Dswk7QNoMXyhs9u8wN8QT
+
+<span class="file">diff --git a/README.md b/README.md</span>
+index 45b31c3..9a8d7b2 100644
+<span class="meta">--- a/README.md</span>
+<span class="meta">+++ b/README.md</span>
+<span class="hunk">@@ -67,13 +67,13 @@ UIs via JSON-RPC) live alongside but aren&#x27;t advertised. See</span>
+ 
+ ## Daily workflows ship as Cowork skills
+ 
+<span class="del">-The daily-ritual surface (`morning_check`, `evening_wrap`,</span>
+<span class="del">-`save_this_chat`, `offboarding`, etc.) ships as **first-party Claude</span>
+<span class="del">-Code skills** via `sync_install`, not as MCP tools. Six skills install</span>
+<span class="del">-on each user&#x27;s Cowork by default: `vgb-morning-check`,</span>
+<span class="del">-`vgb-evening-wrap`, `vgb-evening-sync`, `vgb-save-chat`,</span>
+<span class="del">-`vgb-pull-updates`, `vgb-setup-companion`. They auto-trigger by</span>
+<span class="del">-description matching.</span>
+<span class="add">+The daily-ritual surface (`morning_check`, `offboarding`, etc.) ships as</span>
+<span class="add">+**first-party Claude Code skills** via `sync_install`, not as MCP tools:</span>
+<span class="add">+`vgb-morning-check`, `vgb-pull-updates`, `vgb-setup-companion` and</span>
+<span class="add">+`vgb-offboarding`. They auto-trigger by description matching. Nothing</span>
+<span class="add">+from a chat is saved on its own: a note reaches the brain only when the</span>
+<span class="add">+user asks (one `append_to_brain` call). The 4 PM evening wrap, the</span>
+<span class="add">+evening sync and `vgb-save-chat` are retired.</span>
+ 
+ ---
+ 
+<span class="file">diff --git a/docs/OVERVIEW.md b/docs/OVERVIEW.md</span>
+index 7ab667a..1b32e5f 100644
+<span class="meta">--- a/docs/OVERVIEW.md</span>
+<span class="meta">+++ b/docs/OVERVIEW.md</span>
+<span class="hunk">@@ -35,9 +35,8 @@ called by `/admin` and `/ops` web UIs via direct JSON-RPC. Total</span>
+ advertised for a regular customer: **12 tools** in `tools/list`
+ payload, down from 34 pre-refactor.
+ 
+<span class="del">-Workflows that used to be MCP tools (`morning_check`, `evening_wrap`,</span>
+<span class="del">-`save_this_chat`, `audit_session`, `brain_overview`, `vg_brain_help`,</span>
+<span class="del">-`reorganize_to_team`) shipped as **first-party Claude Code skills** via</span>
+<span class="add">+Workflows that used to be MCP tools (`morning_check`, `audit_session`,</span>
+<span class="add">+`brain_overview`, `vg_brain_help`, `reorganize_to_team`) shipped as **first-party Claude Code skills** via</span>
+ the new `sync_install` work-order channel — they auto-trigger by
+ description matching when the user or a scheduled task fires the right
+ prompt. Data-admin operations (`delete_note`, `rename_note`,
+<span class="hunk">@@ -45,10 +44,8 @@ prompt. Data-admin operations (`delete_note`, `rename_note`,</span>
+ Discovery sugar nobody used (`search_by_tag`, `related_notes`,
+ `linked_files`) and the brain-native skill mechanism (`list_skills` /
+ `invoke_skill`) retired entirely. The draft tools `save_draft` /
+<span class="del">-`publish_draft` were retired in v0.34 — the auto-capture +</span>
+<span class="del">-revoke-in-morning pattern (vgb-evening-wrap writing with</span>
+<span class="del">-`auto_captured: true`, surfaced for revoke next morning) replaced the</span>
+<span class="del">-draft-by-default review loop.</span>
+<span class="add">+`publish_draft` were retired in v0.34. Today nothing is saved on its</span>
+<span class="add">+own: a note reaches the brain only when the user asks.</span>
+ 
+ Real OAuth identity (Google + Microsoft, PKCE, OS-keychain refresh
+ tokens) for the stdio path; per-user bearer tokens for the HTTP path
+<span class="hunk">@@ -62,8 +59,7 @@ trust boundary (no Row-Level Security). Stable file IDs in frontmatter (since</span>
+ alpha.6) so renames don&#x27;t break references. Every tool call writes one
+ row to a tool_telemetry table for cost/latency tracking (since
+ alpha.7). The full non-technical-user lifecycle (sign in → morning
+<span class="del">-brief → capture → retrieve → draft → publish → evening wrap) is</span>
+<span class="del">-implemented and demoable.</span>
+<span class="add">+brief → save on request → retrieve) is implemented and demoable.</span>
+ 
+ A daily server-side cron (`src/digest-cron.ts`, fires at 10 UTC) walks
+ each tenant&#x27;s audit log and writes per-user
+<span class="hunk">@@ -227,16 +223,11 @@ the standard template if it doesn&#x27;t exist. Counts drafts awaiting review.</span>
+ Surfaces the three files most recently touched in the last 72 hours.
+ Returns a one-paragraph briefing scannable in 10 seconds.
+ 
+<span class="del">-**End-of-day capture (now the `vgb-evening-wrap` skill).** Fires silently</span>
+<span class="del">-at 4 PM local. Scans today&#x27;s conversation for decisions, methodology,</span>
+<span class="del">-client/workstation context, and writes them straight to the brain with</span>
+<span class="del">-`auto_captured: true`. The captures surface in tomorrow morning&#x27;s digest</span>
+<span class="del">-with a per-row revoke handle — if the user doesn&#x27;t like what was kept,</span>
+<span class="del">-they say &quot;revoke 2&quot; (or the id) and `revoke_note_entry` undoes that</span>
+<span class="del">-specific write. Replaces the older draft-by-default loop (`save_draft` /</span>
+<span class="del">-`publish_draft`) — the new model is &quot;write freely overnight, review and</span>
+<span class="del">-revoke in the morning.&quot; `evening_wrap()` as an MCP tool is retired (and</span>
+<span class="del">-hidden); the skill is the canonical surface.</span>
+<span class="add">+**End-of-day capture: retired.** The 4 PM `vgb-evening-wrap` skill and</span>
+<span class="add">+the `evening_wrap()` tool are gone, and nothing replaced them: a chat</span>
+<span class="add">+reaches the brain only when the user asks for it to be saved. The</span>
+<span class="add">+weekly brain review suggests what is worth keeping from the week, and</span>
+<span class="add">+saves only what the user approves.</span>
+ 
+ ---
+ 
+<span class="hunk">@@ -371,10 +362,9 @@ the brain. So the brain asks itself. Three first-party Cowork-side</span>
+ scheduled tasks ship automatically via `sync_install` on first-run, plus
+ a server-side cron that pre-computes the morning digest:
+ 
+<span class="del">-- **4:00 PM local — evening wrap.** Fires the `vgb-evening-wrap` skill,</span>
+<span class="del">-  which silently scans today&#x27;s conversation for decisions / methodology</span>
+<span class="del">-  / handoff-worthy notes and writes them with `auto_captured=true` so</span>
+<span class="del">-  they surface in tomorrow&#x27;s morning digest for review.</span>
+<span class="add">+- **(Retired) 4:00 PM local — evening wrap.** The `vgb-evening-wrap`</span>
+<span class="add">+  skill and its task are gone; `sync_install` removes them from older</span>
+<span class="add">+  installs. Nothing saves on its own any more.</span>
+ - **4:35 PM local — evening sync.** Fires `vgb-evening-sync` 35 minutes
+   after wrap (so teammates&#x27; just-pushed content has settled). Calls
+   `sync_install` and installs anything new — skills / schedules /
+<span class="hunk">@@ -707,20 +697,15 @@ Sync (instruction layer):</span>
+ 
+ ### First-party Claude Code skills
+ 
+<span class="del">-The workflows that used to be MCP tools (morning briefing, evening</span>
+<span class="del">-wrap, save-this-chat, audit-session, etc.) ship as Cowork skills via</span>
+<span class="add">+The workflows that used to be MCP tools (morning briefing,</span>
+<span class="add">+audit-session, etc.) ship as Cowork skills via</span>
+ `sync_install` (defined in `src/first-party-skills.ts`):
+ 
+ - `vgb-morning-check` — reads the pre-computed digest at
+   `people/&lt;handle&gt;/digests/morning.json` and renders it
+   conversationally. Lightweight (no audit-log walking).
+<span class="del">-- `vgb-evening-wrap` — 4 PM scheduled task. Captures today&#x27;s chat to</span>
+<span class="del">-  the brain silently with `auto_captured=true` so it surfaces in</span>
+<span class="del">-  tomorrow&#x27;s morning digest for review.</span>
+ - `vgb-evening-sync` — 4:35 PM scheduled task. Calls `sync_install`
+   and installs anything new on the user&#x27;s Cowork.
+<span class="del">-- `vgb-save-chat` — interactive review-and-save. Walks the</span>
+<span class="del">-  conversation, proposes scope per item, batch-confirms.</span>
+ - `vgb-pull-updates` — on-demand version of evening-sync.
+ - `vgb-setup-companion` — first-run onboarding paired with the
+   `vg_brain_setup` MCP tool.
+<span class="file">diff --git a/scripts/test-context-health.ts b/scripts/test-context-health.ts</span>
+index 35e5d68..a12d851 100644
+<span class="meta">--- a/scripts/test-context-health.ts</span>
+<span class="meta">+++ b/scripts/test-context-health.ts</span>
+<span class="hunk">@@ -14,7 +14,7 @@ import { readFileSync } from &quot;node:fs&quot;;</span>
+ import { resolve, dirname } from &quot;node:path&quot;;
+ import { fileURLToPath } from &quot;node:url&quot;;
+ import { __setPoolForTesting } from &quot;../src/db.js&quot;;
+<span class="del">-import { contextHealthFor, contextHealthLine } from &quot;../src/context-health.js&quot;;</span>
+<span class="add">+import { contextHealthFor, contextHealthLine, showsContextHealth } from &quot;../src/context-health.js&quot;;</span>
+ 
+ const here = dirname(fileURLToPath(import.meta.url));
+ let failures = 0;
+<span class="hunk">@@ -39,6 +39,7 @@ async function main(): Promise&lt;void&gt; {</span>
+     check(&quot;line says NEVER, positively and unambiguously&quot;, /NEVER served to you/.test(line), line);
+     check(&quot;…and names the consequence (no pre-loaded context)&quot;, /without your session context/.test(line));
+     check(&quot;…and points at the operator when capture also fails&quot;, /session hook is not reaching the server/.test(line));
+<span class="add">+    check(&quot;…and says it is expected in a web browser, where hooks don&#x27;t run&quot;, /expected in Claude in a web browser/.test(line), line);</span>
+ 
+     console.log(&quot;\ntest-context-health: fresh serve…&quot;);
+     await pg.query(
+<span class="hunk">@@ -60,6 +61,14 @@ async function main(): Promise&lt;void&gt; {</span>
+     check(&quot;…hedges honestly (IF that was a DIFFERENT chat)&quot;, /DIFFERENT chat/.test(line));
+     check(&quot;…never asserts &#x27;this chat has no context&#x27; as fact&quot;, !/this chat has no context/i.test(line));
+     check(&quot;…links the capture-destination failure mode&quot;, /Capture-destination changes will also/.test(line));
+<span class="add">+    check(&quot;…and says a gap is expected in a web browser, scoping the warning to the desktop app&quot;,</span>
+<span class="add">+      /expected in Claude in a web browser/.test(line) &amp;&amp; /In the desktop app with the VG Brain autosave plugin/.test(line), line);</span>
+<span class="add">+</span>
+<span class="add">+    console.log(&quot;\ntest-context-health: who sees the line at all (2026-11-16)…&quot;);</span>
+<span class="add">+    const list = new Set([&quot;alex.passon&quot;, &quot;joe&quot;]);</span>
+<span class="add">+    check(&quot;someone on the autosave list sees it&quot;, showsContextHealth(&quot;Alex.Passon&quot;, list));</span>
+<span class="add">+    check(&quot;someone without the plugin (an operator included) does not&quot;, !showsContextHealth(&quot;liam.sands&quot;, list));</span>
+<span class="add">+    check(&quot;with no autosave list, nobody does&quot;, !showsContextHealth(&quot;alex.passon&quot;, null));</span>
+ 
+     console.log(&quot;\ntest-context-health: isolation + safety…&quot;);
+     const other = await contextHealthFor(&quot;acme&quot;, &quot;someone.else&quot;);
+<span class="file">diff --git a/src/context-health.ts b/src/context-health.ts</span>
+index 7c667d4..a79ca66 100644
+<span class="meta">--- a/src/context-health.ts</span>
+<span class="meta">+++ b/src/context-health.ts</span>
+<span class="hunk">@@ -26,6 +26,7 @@</span>
+  */
+ 
+ import { getPool, hasDatabaseUrl } from &quot;./db.js&quot;;
+<span class="add">+import { hasAutoCapture } from &quot;./auto-capture.js&quot;;</span>
+ 
+ /** Minutes after which a handle&#x27;s last context serve is &quot;stale&quot; — i.e. the
+  *  caller is actively using brain tools but no header has been served
+<span class="hunk">@@ -45,6 +46,19 @@ export interface ContextHealth {</span>
+   ageMinutes: number | null;
+ }
+ 
+<span class="add">+/**</span>
+<span class="add">+ * Whether brain-tool answers carry the line at all: only for people whose</span>
+<span class="add">+ * desktop sessions run the autosave plugin&#x27;s hooks (VG_BRAIN_AUTO_CAPTURE_HANDLES).</span>
+<span class="add">+ * Nobody else&#x27;s sessions ever send a header, so for them the line could only</span>
+<span class="add">+ * ever warn about something that isn&#x27;t broken. Operators used to see it too;</span>
+<span class="add">+ * Liam, who uses the connector without the plugin, got &quot;last served 1419h ago…</span>
+<span class="add">+ * the SessionStart hook did not reach the server&quot; in every browser chat</span>
+<span class="add">+ * (2026-11-16).</span>
+<span class="add">+ */</span>
+<span class="add">+export function showsContextHealth(handle: string, list?: Set&lt;string&gt; | null): boolean {</span>
+<span class="add">+  return list === undefined ? hasAutoCapture(handle) : hasAutoCapture(handle, list);</span>
+<span class="add">+}</span>
+<span class="add">+</span>
+ /** Read the handle&#x27;s context-serve freshness. Never throws — health reporting
+  *  must never break a tool call. */
+ export async function contextHealthFor(
+<span class="hunk">@@ -82,12 +96,16 @@ export async function contextHealthFor(</span>
+  * with what to do about it. Returns &quot;&quot; only when we genuinely cannot tell.
+  */
+ export function contextHealthLine(h: ContextHealth): string {
+<span class="add">+  // The server can&#x27;t tell which app a tool call came from: every call arrives</span>
+<span class="add">+  // through the claude.ai connector, from the browser and the desktop app</span>
+<span class="add">+  // alike. Hooks only run in the desktop app, so say where a gap is expected.</span>
+<span class="add">+  const browser = `That is expected in Claude in a web browser, where session hooks don&#x27;t run. `;</span>
+   if (h.ageMinutes === null) {
+     return (
+<span class="del">-      `\n\n— brain context: NEVER served to you. This chat is running without your ` +</span>
+<span class="del">-      `session context (history, teammates&#x27; work, client vocabulary). Brain search still ` +</span>
+<span class="del">-      `works, but nothing was pre-loaded. If you also cannot set a capture destination, ` +</span>
+<span class="del">-      `the session hook is not reaching the server — tell an operator.`</span>
+<span class="add">+      `\n\n— brain context: NEVER served to you. ${browser}In the desktop app with the ` +</span>
+<span class="add">+      `VG Brain autosave plugin, this chat is running without your session context ` +</span>
+<span class="add">+      `(history, teammates&#x27; work, client vocabulary): brain search still works, but ` +</span>
+<span class="add">+      `nothing was pre-loaded, and the session hook is not reaching the server — tell an operator.`</span>
+     );
+   }
+   const ago = h.ageMinutes &lt; 60 ? `${h.ageMinutes}m ago` : `${Math.floor(h.ageMinutes / 60)}h ago`;
+<span class="hunk">@@ -96,8 +114,10 @@ export function contextHealthLine(h: ContextHealth): string {</span>
+   }
+   return (
+     `\n\n— brain context: last served ${ago}${h.lastSessionId ? ` (session ${h.lastSessionId.slice(0, 8)})` : &quot;&quot;}. ` +
+<span class="del">-    `If that was a DIFFERENT chat, THIS chat is running without session context — the ` +</span>
+<span class="del">-    `SessionStart hook did not reach the server. Capture-destination changes will also ` +</span>
+<span class="del">-    `fail in that state (they need the session tag the header carries). Tell an operator.`</span>
+<span class="add">+    browser +</span>
+<span class="add">+    `In the desktop app with the VG Brain autosave plugin, if that was a DIFFERENT chat, ` +</span>
+<span class="add">+    `THIS chat is running without session context — the SessionStart hook did not reach ` +</span>
+<span class="add">+    `the server. Capture-destination changes will also fail in that state (they need the ` +</span>
+<span class="add">+    `session tag the header carries). Tell an operator.`</span>
+   );
+ }
+<span class="file">diff --git a/src/first-party-skills.ts b/src/first-party-skills.ts</span>
+index 39adb64..43929cc 100644
+<span class="meta">--- a/src/first-party-skills.ts</span>
+<span class="meta">+++ b/src/first-party-skills.ts</span>
+<span class="hunk">@@ -20,12 +20,12 @@</span>
+  * markdown — that&#x27;s the user-authored layer, walked separately by
+  * `scanBrainSkills` in server.ts.
+  *
+<span class="del">- * The five first-party skills:</span>
+<span class="add">+ * The four first-party skills:</span>
+  *   1. vgb-morning-check     — light read of overnight digest
+<span class="del">- *   2. vgb-save-chat         — manual review-and-save of current chat</span>
+<span class="del">- *   3. vgb-pull-updates      — on-demand sync (now the primary sync path)</span>
+<span class="del">- *   4. vgb-setup-companion   — first-run onboarding pairing with vg_brain_setup</span>
+<span class="del">- *   5. vgb-offboarding       — structured handoff capture when a teammate leaves</span>
+<span class="add">+ *   2. vgb-pull-updates      — on-demand sync (now the primary sync path)</span>
+<span class="add">+ *   3. vgb-setup-companion   — first-run onboarding pairing with vg_brain_setup</span>
+<span class="add">+ *   4. vgb-offboarding       — structured handoff capture when a teammate leaves</span>
+<span class="add">+ * (vgb-save-chat was retired 2026-05-31; see FIRST_PARTY_SKILLS below.)</span>
+  *
+  * RETIRED (v1.1): vgb-evening-wrap + vgb-evening-sync. Their roles moved to
+  * the two Cowork session hooks shipped in the .plugin bundle (see
+<span class="hunk">@@ -134,13 +134,12 @@ After the revoke succeeds, acknowledge what was undone in one line.</span>
+ ## Step 5 — STOP
+ 
+ Don&#x27;t proactively suggest reorganization (the digest&#x27;s reorganization_hints
+<span class="del">-is empty in v1 anyway). Don&#x27;t continue into save-chat</span>
+<span class="del">-territory. The morning check is a briefing — let the user pick what&#x27;s next.</span>
+<span class="add">+is empty in v1 anyway). Don&#x27;t offer to save anything from it. The morning check is a briefing — let the user pick what&#x27;s next.</span>
+ `;
+ 
+ export const BS_MORNING_CHECK: FirstPartySkill = {
+   id: &quot;vgb-morning-check&quot;,
+<span class="del">-  version: &quot;1.0&quot;,</span>
+<span class="add">+  version: &quot;1.1&quot;,</span>
+   displayName: &quot;Morning check&quot;,
+   description:
+     &quot;Renders the overnight digest conversationally. Light morning lift — no audit-log walking, just reads the pre-computed JSON.&quot;,
+<span class="hunk">@@ -244,7 +243,7 @@ export const BS_PULL_UPDATES: FirstPartySkill = {</span>
+ 
+ const BS_SETUP_COMPANION_BODY = `---
+ name: vgb-setup-companion
+<span class="del">-description: First-run onboarding companion for VG Brain. Pairs with the vg_brain_setup MCP tool to walk a new user through identity confirmation, initial sync (installing the other four first-party skills and the morning-check scheduled task), and a brief orientation. Triggers on first-run signals and explicit setup requests: &quot;set up VG Brain&quot;, &quot;configure VG Brain&quot;, &quot;I just installed VG Brain&quot;, &quot;finish VG Brain setup&quot;.</span>
+<span class="add">+description: First-run onboarding companion for VG Brain. Pairs with the vg_brain_setup MCP tool to walk a new user through identity confirmation, initial sync (installing the other three first-party skills and the morning-check scheduled task), and a brief orientation. Triggers on first-run signals and explicit setup requests: &quot;set up VG Brain&quot;, &quot;configure VG Brain&quot;, &quot;I just installed VG Brain&quot;, &quot;finish VG Brain setup&quot;.</span>
+ triggers:
+   - &quot;set up VG Brain&quot;
+   - &quot;configure VG Brain&quot;
+<span class="hunk">@@ -286,12 +285,12 @@ If the user pushes back (&quot;wrong account&quot; / &quot;not my team&quot;), point them at:</span>
+ 
+ Call \`sync_install\`. On a fresh install the work order typically
+ contains:
+<span class="del">-  - The other four first-party skills (vgb-morning-check, vgb-save-chat,</span>
+<span class="add">+  - The other three first-party skills (vgb-morning-check,</span>
+     vgb-pull-updates, vgb-offboarding)
+   - One first-party scheduled task:
+       - Morning (user-configurable, default 8:00 AM) — fires vgb-morning-check
+<span class="del">-  - One global-instructions block describing what VG Brain is and how</span>
+<span class="del">-    to invoke its features</span>
+<span class="add">+  - One global-instructions block asking for a brain scope when a skill</span>
+<span class="add">+    is built (vgb-skill-build-scope-prompt)</span>
+ 
+ Capture and context injection are handled by the two session hooks that
+ ship in the .plugin bundle (SessionEnd → /ingest, SessionStart →
+<span class="hunk">@@ -309,12 +308,12 @@ ONE short message — don&#x27;t dump a tutorial. The product is designed for</span>
+ natural-language invocation; users discover features as they need them.
+ 
+   &gt; &quot;You&#x27;re set up. VG Brain will:
+<span class="del">-  &gt;  • Capture decisions and notes from your chats automatically (at the end of each session)</span>
+<span class="del">-  &gt;  • Brief you each morning on what&#x27;s new and what needs review</span>
+<span class="add">+  &gt;  • Brief you each morning on what&#x27;s new</span>
+   &gt;  • Pull teammates&#x27; shared skills and content when you say &#x27;pull updates&#x27;
+   &gt;
+<span class="del">-  &gt; Try saying &#x27;morning check&#x27; or &#x27;save this chat&#x27; anytime. No special</span>
+<span class="del">-  &gt; syntax — just ask in plain language.&quot;</span>
+<span class="add">+  &gt; Nothing from your chats is saved on its own: when something is worth</span>
+<span class="add">+  &gt; keeping, say &#x27;save this to the brain&#x27;. Try &#x27;morning check&#x27; anytime.</span>
+<span class="add">+  &gt; No special syntax — just ask in plain language.&quot;</span>
+ 
+ ## Step 5 — STOP
+ 
+<span class="hunk">@@ -326,7 +325,7 @@ when relevant.</span>
+ 
+ export const BS_SETUP_COMPANION: FirstPartySkill = {
+   id: &quot;vgb-setup-companion&quot;,
+<span class="del">-  version: &quot;1.0&quot;,</span>
+<span class="add">+  version: &quot;1.1&quot;,</span>
+   displayName: &quot;Setup companion&quot;,
+   description:
+     &quot;First-run onboarding skill. Pairs with vg_brain_setup, runs initial sync, gives a brief orientation. Then gets out of the way.&quot;,
+<span class="hunk">@@ -424,8 +423,8 @@ export interface FirstPartyGlobalInstruction {</span>
+  * moment a skill is built keeps the silent capture path (the SessionEnd
+  * transcript ingest + server-side drainer) from having to guess scope or sit
+  * on a question. Without this block, the only place to capture scope would be
+<span class="del">- * vgb-save-chat (which only fires on explicit user request — many skills</span>
+<span class="del">- * would slip through).</span>
+<span class="add">+ * an explicit save, which only happens when the user asks (many skills would</span>
+<span class="add">+ * slip through).</span>
+  */
+ const BS_SKILL_BUILD_SCOPE_PROMPT_CONTENT = `Whenever you help the user build, revise, or import a Claude Code skill — whether via the skill-creator skill, a direct request like &quot;build me a skill that does X&quot;, or any other path that produces a SKILL.md — as soon as the skill markdown is finished and you have its name, ask the user where in their VG Brain brain it should live. Use exactly this prompt (substitute the skill name and any specific subteam names the user has access to):
+ 
+<span class="file">diff --git a/src/note-dedup.ts b/src/note-dedup.ts</span>
+index 2685f16..a928336 100644
+<span class="meta">--- a/src/note-dedup.ts</span>
+<span class="meta">+++ b/src/note-dedup.ts</span>
+<span class="hunk">@@ -2,7 +2,7 @@</span>
+  * vg-brain v1.2 — deterministic, no-API note dedup for the Stage-2 drainer
+  * (capture-refinements section B).
+  *
+<span class="del">- * This is the load-bearing piece that keeps manual saves (vgb-save-chat) and</span>
+<span class="add">+ * This is the load-bearing piece that keeps manual saves (append_to_brain) and</span>
+  * the nightly drainer from colliding, and keeps the drainer from re-filing a
+  * note it already wrote earlier in the same session/night. It is intentionally
+  * dependency-free (pure functions over strings) so it can be unit-tested and
+<span class="file">diff --git a/src/server.ts b/src/server.ts</span>
+index 97ff348..3145e72 100644
+<span class="meta">--- a/src/server.ts</span>
+<span class="meta">+++ b/src/server.ts</span>
+<span class="hunk">@@ -219,7 +219,7 @@ import {</span>
+  *  appended in the ListToolsRequestSchema handler, which is async and has caller
+  *  identity — the module-level tool array has neither. */
+ const CAPTURE_TICKET_HINT = &quot;&quot;;
+<span class="del">-import { contextHealthFor, contextHealthLine } from &quot;./context-health.js&quot;;</span>
+<span class="add">+import { contextHealthFor, contextHealthLine, showsContextHealth } from &quot;./context-health.js&quot;;</span>
+ import { captureDisabled } from &quot;./session-bridge.js&quot;;
+ import { mcpCapturePreamble, readersSentence, standingReaderNames, invalidateStandingReaders, saveOfferEnabled } from &quot;./standing-readers.js&quot;;
+ import { recordRecall, getRecallBoostData, getRecallMap } from &quot;./recall.js&quot;;
+<span class="hunk">@@ -9076,11 +9076,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) =&gt; {</span>
+       // signal cannot work here (an absent error looks like a healthy system).
+       let healthLine = &quot;&quot;;
+       try {
+<span class="del">-        // Only for people whose sessions run hooks (auto-capture) and</span>
+<span class="del">-        // operators. Everyone else connects through the claude.ai connector,</span>
+<span class="del">-        // which never sends session context, so the line only ever said</span>
+<span class="del">-        // &quot;NEVER served… tell an operator&quot; to them (rollout 2026-10-01).</span>
+<span class="del">-        if (isOperator() || hasAutoCapture(getCurrentUser())) healthLine = contextHealthLine(</span>
+<span class="add">+        // Only for people whose desktop sessions run the autosave hooks.</span>
+<span class="add">+        // Everyone else connects through the claude.ai connector, which never</span>
+<span class="add">+        // sends session context, so the line could only ever warn them about</span>
+<span class="add">+        // nothing (rollout 2026-10-01; operators too since 2026-11-16).</span>
+<span class="add">+        if (showsContextHealth(getCurrentUser())) healthLine = contextHealthLine(</span>
+           await contextHealthFor(getCurrentTenant(), getCurrentUser()),
+         );
+       } catch {
+<span class="hunk">@@ -9568,11 +9568,11 @@ server.setRequestHandler(CallToolRequestSchema, async (req) =&gt; {</span>
+       // signal cannot work here (an absent error looks like a healthy system).
+       let healthLine = &quot;&quot;;
+       try {
+<span class="del">-        // Only for people whose sessions run hooks (auto-capture) and</span>
+<span class="del">-        // operators. Everyone else connects through the claude.ai connector,</span>
+<span class="del">-        // which never sends session context, so the line only ever said</span>
+<span class="del">-        // &quot;NEVER served… tell an operator&quot; to them (rollout 2026-10-01).</span>
+<span class="del">-        if (isOperator() || hasAutoCapture(getCurrentUser())) healthLine = contextHealthLine(</span>
+<span class="add">+        // Only for people whose desktop sessions run the autosave hooks.</span>
+<span class="add">+        // Everyone else connects through the claude.ai connector, which never</span>
+<span class="add">+        // sends session context, so the line could only ever warn them about</span>
+<span class="add">+        // nothing (rollout 2026-10-01; operators too since 2026-11-16).</span>
+<span class="add">+        if (showsContextHealth(getCurrentUser())) healthLine = contextHealthLine(</span>
+           await contextHealthFor(getCurrentTenant(), getCurrentUser()),
+         );
+       } catch {
+<span class="file">diff --git a/src/vg-brain-setup.ts b/src/vg-brain-setup.ts</span>
+index 5d05520..796e888 100644
+<span class="meta">--- a/src/vg-brain-setup.ts</span>
+<span class="meta">+++ b/src/vg-brain-setup.ts</span>
+<span class="hunk">@@ -22,8 +22,8 @@</span>
+  * Ship-1 scope (this file):
+  *   - Welcome + interview (informational only — no seed-note creation)
+  *   - Morning scheduled task creation via Cowork
+<span class="del">- *   - Afternoon scheduled task creation via Cowork (runs save_this_chat)</span>
+<span class="del">- *   - Global-instructions append (marker-block-bracketed, idempotent)</span>
+<span class="add">+ *   - (no afternoon task: the wrap it ran is retired, nothing saves on its own)</span>
+<span class="add">+ *   - (no global-instructions block: see the note above PlaybookContext)</span>
+  *   - complete_first_run call
+  *
+  * NOT in ship-1 scope:
+<span class="hunk">@@ -168,96 +168,15 @@ const MORNING_TASK_DESCRIPTION =</span>
+ // the setup playbooks can delete a lingering task from older installs.
+ const WRAP_TASK_ID = &quot;vg-brain-wrap&quot;;
+ 
+<span class="del">-/**</span>
+<span class="del">- * The block that VG Brain appends to the user&#x27;s Cowork global</span>
+<span class="del">- * instructions on first install. Bracketed by HTML comment markers so</span>
+<span class="del">- * we can find/replace this block on re-runs without disturbing</span>
+<span class="del">- * anything else the user has customized in their global instructions.</span>
+<span class="del">- *</span>
+<span class="del">- * The block leads with WHY VG Brain exists (context-window</span>
+<span class="del">- * extension / persistent memory) before the HOW (which tools to call,</span>
+<span class="del">- * read vs write framing). Without the &quot;why,&quot; Cowork tends to treat</span>
+<span class="del">- * VG Brain as just another tool to invoke when explicitly asked,</span>
+<span class="del">- * rather than as the persistent memory layer the user paid for. The</span>
+<span class="del">- * extra length is worth it — the alternative is Cowork failing to</span>
+<span class="del">- * read from or write to VG Brain on its own initiative, which</span>
+<span class="del">- * defeats the product.</span>
+<span class="del">- */</span>
+<span class="del">-const GLOBAL_INSTRUCTIONS_MARKER_START = &quot;&lt;!-- VG Brain:start --&gt;&quot;;</span>
+<span class="del">-const GLOBAL_INSTRUCTIONS_MARKER_END = &quot;&lt;!-- VG Brain:end --&gt;&quot;;</span>
+<span class="del">-const GLOBAL_INSTRUCTIONS_BLOCK = [</span>
+<span class="del">-  GLOBAL_INSTRUCTIONS_MARKER_START,</span>
+<span class="del">-  &quot;VG Brain is the user&#x27;s persistent memory across sessions. Things from&quot;,</span>
+<span class="del">-  &quot;prior chats live there, not your current context — fetch on demand.&quot;,</span>
+<span class="del">-  &quot;&quot;,</span>
+<span class="del">-  &quot;CONSULT IT (search_brain) when the answer would&quot;,</span>
+<span class="del">-  &quot;live in persisted memory: past decisions and the reasoning behind them,&quot;,</span>
+<span class="del">-  &quot;client terms or methodology, teammate work, project history, glossary —&quot;,</span>
+<span class="del">-  &quot;anything that predates this chat.&quot;,</span>
+<span class="del">-  &quot;&quot;,</span>
+<span class="del">-  &quot;Do NOT lead with the brain for LIVE or transactional questions — inbox,&quot;,</span>
+<span class="del">-  &quot;calendar, a specific file, current-world facts — or things you can just&quot;,</span>
+<span class="del">-  &quot;answer. Route those to the real source (the relevant connector, the file,&quot;,</span>
+<span class="del">-  &quot;web search, or your own reasoning). A weak or empty brain result means the&quot;,</span>
+<span class="del">-  &quot;brain doesn&#x27;t have it: go to the actual source. Never treat a brain miss&quot;,</span>
+<span class="del">-  &quot;as proof the answer doesn&#x27;t exist.&quot;,</span>
+<span class="del">-  &quot;&quot;,</span>
+<span class="del">-  &quot;NOTHING is captured automatically. A chat reaches the brain only when the&quot;,</span>
+<span class="del">-  &quot;user asks and you call append_to_brain — so never tell them a conversation&quot;,</span>
+<span class="del">-  &quot;is being saved on its own, and do not write proactively. When they do ask,&quot;,</span>
+<span class="del">-  &quot;save the WORK (the decision and why, the method, the answer), not the&quot;,</span>
+<span class="del">-  &quot;transcript or a copy of the data; keep a number only where it carries the point.&quot;,</span>
+<span class="del">-  GLOBAL_INSTRUCTIONS_MARKER_END,</span>
+<span class="del">-].join(&quot;\n&quot;);</span>
+<span class="del">-</span>
+<span class="del">-/**</span>
+<span class="del">- * Prose Claude reads to execute the global-instructions step. Used by</span>
+<span class="del">- * both the full setup playbook and the device-init playbook so the</span>
+<span class="del">- * behavior is identical across installs.</span>
+<span class="del">- */</span>
+<span class="del">-function globalInstructionsStepProse(stepHeader: string): string {</span>
+<span class="del">-  return [</span>
+<span class="del">-    stepHeader,</span>
+<span class="del">-    ``,</span>
+<span class="del">-    `VG Brain wants a small section added to the user&#x27;s Cowork global`,</span>
+<span class="del">-    `instructions so Claude knows when to reach for VG Brain tools and`,</span>
+<span class="del">-    `how the user&#x27;s morning routine works. Many users have already`,</span>
+<span class="del">-    `customized their global instructions — do NOT overwrite. Find or`,</span>
+<span class="del">-    `append using marker tags so re-runs stay clean.`,</span>
+<span class="del">-    ``,</span>
+<span class="del">-    `**Step:**`,</span>
+<span class="del">-    ``,</span>
+<span class="del">-    `1. Find Cowork&#x27;s &quot;update global instructions&quot; / &quot;user preferences&quot;`,</span>
+<span class="del">-    `   MCP tool in your available tools (look for a tool named like`,</span>
+<span class="del">-    `   \`mcp__claude_ai_*\` or \`mcp__cowork_*\` that lets you update`,</span>
+<span class="del">-    `   global instructions / user system prompt). If no such tool is`,</span>
+<span class="del">-    `   available in this Claude client, briefly tell the user &quot;your`,</span>
+<span class="del">-    `   Claude client doesn&#x27;t expose a global-instructions API — skipping`,</span>
+<span class="del">-    `   that step; you can paste this manually in Settings → User`,</span>
+<span class="del">-    `   Preferences if you want,&quot; show them the block below, and continue`,</span>
+<span class="del">-    `   to the next step.`,</span>
+<span class="del">-    ``,</span>
+<span class="del">-    `2. Read the current global instructions content. If it already`,</span>
+<span class="del">-    `   contains \`${GLOBAL_INSTRUCTIONS_MARKER_START}\`, locate the block`,</span>
+<span class="del">-    `   between that marker and \`${GLOBAL_INSTRUCTIONS_MARKER_END}\` and`,</span>
+<span class="del">-    `   REPLACE the contents (in case VG Brain has shipped an updated`,</span>
+<span class="del">-    `   version of the block). If the markers are NOT present, APPEND the`,</span>
+<span class="del">-    `   block below to whatever&#x27;s already there — separated by a blank`,</span>
+<span class="del">-    `   line. Never overwrite or delete content outside the marker block.`,</span>
+<span class="del">-    ``,</span>
+<span class="del">-    `3. The block to write:`,</span>
+<span class="del">-    ``,</span>
+<span class="del">-    &quot;```&quot;,</span>
+<span class="del">-    GLOBAL_INSTRUCTIONS_BLOCK,</span>
+<span class="del">-    &quot;```&quot;,</span>
+<span class="del">-    ``,</span>
+<span class="del">-    `4. If the update tool requires confirmation, accept on the user&#x27;s`,</span>
+<span class="del">-    `   behalf (this is a setup step they&#x27;re already signed up for).`,</span>
+<span class="del">-    `   Briefly acknowledge: &quot;Pointed your Claude at VG Brain — it&#x27;ll`,</span>
+<span class="del">-    `   know when to use it.&quot;`,</span>
+<span class="del">-    ``,</span>
+<span class="del">-  ].join(&quot;\n&quot;);</span>
+<span class="del">-}</span>
+<span class="add">+// No global-instructions block (Liam, 2026-11-16). Until now both playbooks</span>
+<span class="add">+// had Claude write a &quot;&lt;!-- VG Brain:start --&gt; ... &lt;!-- VG Brain:end --&gt;&quot; block</span>
+<span class="add">+// into the user&#x27;s Cowork global instructions. Its first wording (2026-05-27)</span>
+<span class="add">+// told Claude to write proactively, use vgb-save-chat and rely on a 4 PM</span>
+<span class="add">+// vgb-evening-wrap capture, all retired, and that text outlived the code in</span>
+<span class="add">+// people&#x27;s settings. The connector&#x27;s own connect-time instructions now carry</span>
+<span class="add">+// when to search and that nothing saves without the user&#x27;s yes, for everyone,</span>
+<span class="add">+// so a second copy in global instructions can only drift. A person who wants</span>
+<span class="add">+// their own wording there pastes it themselves.</span>
+ 
+ interface PlaybookContext {
+   handle: string;
+<span class="hunk">@@ -313,7 +232,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {</span>
+     `  handle: ${ctx.handle}`,
+     `  tenant: ${ctx.tenant}`,
+     ``,
+<span class="del">-    `===== STEP 1 OF 4: WELCOME BACK =====`,</span>
+<span class="add">+    `===== STEP 1 OF 3: WELCOME BACK =====`,</span>
+     ``,
+     `Say to the user (short, warm, acknowledges they&#x27;re a returning user):`,
+     ``,
+<span class="hunk">@@ -326,7 +245,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {</span>
+     ``,
+     `Wait for any acknowledgement, then move to STEP 2.`,
+     ``,
+<span class="del">-    `===== STEP 2 OF 4: CREATE THE MORNING SCHEDULED TASK =====`,</span>
+<span class="add">+    `===== STEP 2 OF 3: CREATE THE MORNING SCHEDULED TASK =====`,</span>
+     ``,
+     `Call \`mcp__scheduled-tasks__create_scheduled_task\` for the morning ` +
+       `briefing. Cowork will ask the user to confirm. (There is no afternoon ` +
+<span class="hunk">@@ -362,8 +281,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {</span>
+     `After it succeeds, briefly acknowledge: &quot;Morning briefing wired up on ` +
+       `this install.&quot;`,
+     ``,
+<span class="del">-    globalInstructionsStepProse(`===== STEP 3 OF 4: POINT CLAUDE AT VG BRAIN (GLOBAL INSTRUCTIONS) =====`),</span>
+<span class="del">-    `===== STEP 4 OF 4: MARK THIS INSTALL COMPLETE =====`,</span>
+<span class="add">+    `===== STEP 3 OF 3: MARK THIS INSTALL COMPLETE =====`,</span>
+     ``,
+     `Call VG Brain&#x27;s \`complete_first_run\` tool (no arguments). It will ` +
+       `record this Cowork install in the user&#x27;s installed_clients list ` +
+<span class="hunk">@@ -372,7 +290,7 @@ export function buildDeviceInitPlaybook(ctx: PlaybookContext): string {</span>
+     `Then say to the user, in your own warm voice (short paragraph):`,
+     ``,
+     `&gt; &quot;All set on this device, ${greetingName}! Your morning briefing runs ` +
+<span class="del">-      `at 8:30am and your end-of-day wrap at 4:30pm on weekdays. Your brain ` +</span>
+<span class="add">+      `at 8:30am on weekdays. Your brain ` +</span>
+       `is the same one you&#x27;ve been building — just now reachable from this ` +
+       `Cowork install too.&quot;`,
+     ``,
+<span class="hunk">@@ -402,7 +320,7 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {</span>
+     `  tenant: ${ctx.tenant}`,
+     `  email:  ${ctx.email}`,
+     ``,
+<span class="del">-    `===== STEP 1 OF 6: HELLO =====`,</span>
+<span class="add">+    `===== STEP 1 OF 5: HELLO =====`,</span>
+     ``,
+     `Say to the user, in your own voice but keeping it warm and short ` +
+       `(one short paragraph, no bullet lists):`,
+<span class="hunk">@@ -420,7 +338,7 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {</span>
+       `decline or want to defer, tell them they can come back anytime by saying &quot;set ` +
+       `up VG Brain&quot; and stop the playbook. Otherwise continue to STEP 2.`,
+     ``,
+<span class="del">-    `===== STEP 2 OF 6: CONTEXT INTERVIEW =====`,</span>
+<span class="add">+    `===== STEP 2 OF 5: CONTEXT INTERVIEW =====`,</span>
+     ``,
+     `**FIRST — check which context-pull MCP tools are loaded in your tool list:**`,
+     `  - Gmail tools (look for any tool starting with \`mcp__claude_ai_Gmail__\`)`,
+<span class="hunk">@@ -486,7 +404,7 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {</span>
+       `showing up in their connected tools, or (PATH B) given them the heads-up ` +
+       `about connectors and committed to passive growth. Move on to STEP 3.`,
+     ``,
+<span class="del">-    `===== STEP 3 OF 6: CREATE THE MORNING SCHEDULED TASK =====`,</span>
+<span class="add">+    `===== STEP 3 OF 5: CREATE THE MORNING SCHEDULED TASK =====`,</span>
+     ``,
+     `Tell the user:`,
+     ``,
+<span class="hunk">@@ -511,12 +429,12 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {</span>
+     `If \`mcp__scheduled-tasks__create_scheduled_task\` is not available at all (different ` +
+       `Claude client), tell the user: &quot;Your Claude client doesn&#x27;t support ` +
+       `scheduled tasks yet — you can still run &#x27;morning_check&#x27; manually ` +
+<span class="del">-      `whenever you want. Skipping the schedule.&quot; Then skip to STEP 5.`,</span>
+<span class="add">+      `whenever you want. Skipping the schedule.&quot; Then skip to STEP 4.`,</span>
+     ``,
+     `If creation (or update) succeeds, briefly acknowledge: &quot;Morning briefing ` +
+       `scheduled.&quot;`,
+     ``,
+<span class="del">-    `===== STEP 4 OF 6: REMOVE THE RETIRED WRAP TASK =====`,</span>
+<span class="add">+    `===== STEP 4 OF 5: REMOVE THE RETIRED WRAP TASK =====`,</span>
+     ``,
+     `Nothing is captured automatically — a chat reaches the brain only when ` +
+       `the user asks for it and Claude calls append_to_brain. So there is no ` +
+<span class="hunk">@@ -531,18 +449,17 @@ export function buildSetupPlaybook(ctx: PlaybookContext): string {</span>
+     `Acknowledge only if you actually removed one: &quot;Cleaned up the old ` +
+       `afternoon wrap.&quot; Otherwise say nothing and move on.`,
+     ``,
+<span class="del">-    globalInstructionsStepProse(`===== STEP 5 OF 6: POINT CLAUDE AT VG BRAIN (GLOBAL INSTRUCTIONS) =====`),</span>
+<span class="del">-    `===== STEP 6 OF 6: MARK SETUP COMPLETE =====`,</span>
+<span class="add">+    `===== STEP 5 OF 5: MARK SETUP COMPLETE =====`,</span>
+     ``,
+     `Call VG Brain&#x27;s \`complete_first_run\` tool (no arguments). This opens the ` +
+       `gate so every VG Brain tool becomes callable.`,
+     ``,
+     `Then say to the user, in your own warm voice (short paragraph, no bullets):`,
+     ``,
+<span class="del">-    `&gt; &quot;All set, ${greetingName}! Your morning briefing runs at 8:30am and your ` +</span>
+<span class="del">-      `end-of-day wrap runs at 4:30pm on weekdays. VG Brain is open — try saying ` +</span>
+<span class="del">-      `&#x27;morning_check&#x27; for your first daily log, or just talk to me about your ` +</span>
+<span class="del">-      `work and I&#x27;ll capture what&#x27;s useful. To manage members, invite teammates, ` +</span>
+<span class="add">+    `&gt; &quot;All set, ${greetingName}! Your morning briefing runs at 8:30am on ` +</span>
+<span class="add">+      `weekdays. VG Brain is open — try saying &#x27;morning_check&#x27; for your first ` +</span>
+<span class="add">+      `daily log. Nothing from our chats is saved unless you ask me to save it. ` +</span>
+<span class="add">+      `To manage members, invite teammates, ` +</span>
+       `or see what&#x27;s in your brain, visit vg-brain.com. Welcome aboard.&quot;`,
+     ``,
+     `Then STOP. The playbook is complete. Do not keep talking, do not summarize, do ` +
+</pre>
+</details>
+</main>
+<script>
+document.getElementById("copyBlock").addEventListener("click", function () {
+  var btn = this, text = document.getElementById("newBlock").textContent;
+  function selectIt() { var r = document.createRange(); r.selectNodeContents(document.getElementById("newBlock")); var s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = "Selected: copy it"; }
+  try { navigator.clipboard.writeText(text).then(function () { btn.textContent = "Copied"; }, selectIt); } catch (e) { selectIt(); }
+});
+</script>
